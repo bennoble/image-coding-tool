@@ -408,14 +408,57 @@ def main():
         st.info(f"Complete coding all {total_images} images to export final results.")
     
     # Download progress backup
-    if st.button("📥 Download Progress Backup"):
-        progress_json = json.dumps(progress_data, indent=2)
-        st.download_button(
-            label="Download backup.json",
-            data=progress_json,
-            file_name=f"coding_progress_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-            mime="application/json"
-        )
+    st.markdown("---")
+    
+    # Always available download section
+    st.subheader("💾 Download Progress")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("📥 Download Progress Backup (JSON)"):
+            progress_json = json.dumps(progress_data, indent=2)
+            st.download_button(
+                label="📁 Download backup.json",
+                data=progress_json,
+                file_name=f"coding_progress_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                mime="application/json"
+            )
+    
+    with col2:
+        if st.button("📊 Download Current Results (CSV)"):
+            # Convert current progress to CSV format
+            current_labels = []
+            current_context = []
+            for i in range(total_images):
+                if str(i) in progress_data:
+                    if isinstance(progress_data[str(i)], dict):
+                        current_labels.append(progress_data[str(i)].get('group_label'))
+                        current_context.append(progress_data[str(i)].get('context'))
+                    else:
+                        # Handle old format
+                        current_labels.append(progress_data[str(i)])
+                        current_context.append(None)
+                else:
+                    current_labels.append(None)
+                    current_context.append(None)
+            
+            # Create a copy of the metadata and add coding columns
+            export_df = metadata_df.copy()
+            export_df['group_labels'] = current_labels
+            export_df['context_labels'] = current_context
+            export_df['coding_timestamp'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            export_df['completion_status'] = f"{coded_count}/{total_images} images coded"
+            
+            # Convert to CSV
+            csv_data = export_df.to_csv(index=False)
+            
+            st.download_button(
+                label="📊 Download current-results.csv",
+                data=csv_data,
+                file_name=f"ra-shingle-progress_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv"
+            )
 
 if __name__ == "__main__":
     main()
