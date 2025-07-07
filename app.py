@@ -4,6 +4,9 @@ import os
 from PIL import Image
 import json
 from datetime import datetime
+import requests
+import zipfile
+import io
 
 # Configure the page
 st.set_page_config(
@@ -12,9 +15,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# File paths - adjust these to match your setup
-METADATA_FILE = '20250707_ra_shingle.csv'
-IMAGES_FOLDER = '20250124_sample-images-for-coding-v2-20250214-pb'
+# File paths - these will be loaded from cloud storage
 PROGRESS_FILE = 'coding_progress.json'
 OUTPUT_FILE = 'ra-shingle-complete.csv'
 
@@ -32,13 +33,57 @@ CONTEXT_CATEGORIES = {
     2: "Congress"
 }
 
-def load_metadata():
-    """Load the metadata CSV file"""
-    if os.path.exists(METADATA_FILE):
-        return pd.read_csv(METADATA_FILE)
-    else:
-        st.error(f"Metadata file not found: {METADATA_FILE}")
+@st.cache_data
+def load_data_from_cloud():
+    """Load CSV and images from cloud storage using secrets"""
+    try:
+        # Get URLs from Streamlit secrets
+        csv_url = st.secrets["data_files"]["csv_url"]
+        images_zip_url = st.secrets["data_files"]["images_zip_url"]
+        
+        # Download CSV
+        csv_response = requests.get(csv_url)
+        csv_response.raise_for_status()
+        
+        # Create DataFrame from downloaded CSV
+        metadata_df = pd.read_csv(io.StringIO(csv_response.text))
+        
+        # Download and extract images zip
+        zip_response = requests.get(images_zip_url)
+        zip_response.raise_for_status()
+        
+        # Extract images to memory
+        images_dict = {}
+        with zipfile.ZipFile(io.BytesIO(zip_response.content)) as zip_file:
+            for file_info in zip_file.filelist:
+                if file_info.filename.lower().endswith(('.jpg', '.jpeg', '.png')):
+                    with zip_file.open(file_info) as image_file:
+                        images_dict[os.path.basename(file_info.filename)] = Image.open(io.BytesIO(image_file.read()))
+        
+        return metadata_df, images_dict
+        
+    except Exception as e:
+        st.error(f"Error loading data from cloud storage: {e}")
+        st.info("Make sure your Streamlit secrets are configured correctly.")
+        return None, None
+
+def save_to_cloud_csv(metadata_df):
+    """Save the updated CSV back to cloud storage"""
+    try:
+        # For now, we'll save locally and provide download link
+        # Cloud storage writing requires additional authentication
+        csv_buffer = io.StringIO()
+        metadata_df.to_csv(csv_buffer, index=False)
+        
+        return csv_buffer.getvalue()
+        
+    except Exception as e:
+        st.error(f"Error preparing CSV for download: {e}")
         return None
+
+def load_metadata():
+    """Load the metadata from cloud storage"""
+    return None  # This function is now handled by load_data_from_cloud()
 
 def load_progress():
     """Load existing progress from JSON file"""
@@ -53,19 +98,30 @@ def save_progress(progress_data):
         json.dump(progress_data, f, indent=2)
 
 def save_final_results(metadata_df, coded_labels, context_labels):
-    """Save final results to CSV"""
+    """Save final results to CSV for download"""
     metadata_df['group_labels'] = coded_labels
     metadata_df['context_labels'] = context_labels
     metadata_df['coding_timestamp'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    metadata_df.to_csv(OUTPUT_FILE, index=False)
-    st.success(f"Results saved to {OUTPUT_FILE}")
+    
+    # Prepare CSV for download
+    csv_data = save_to_cloud_csv(metadata_df)
+    if csv_data:
+        st.download_button(
+            label="💾 Download Completed Results CSV",
+            data=csv_data,
+            file_name=OUTPUT_FILE,
+            mime="text/csv",
+            type="primary"
+        )
+        st.success("Results prepared for download! Click the button above to save your completed coding.")
+        st.info("📧 Please email this completed CSV file back to the research team.")
 
 def main():
     st.title("📸 Image Coding Tool")
     st.markdown("### Instructions")
     st.markdown("""
     **Please categorize each image based on the number of people visible:**
-    - **0 = No people**: No human figures visible or 50%+ text.
+    - **0 = Infographic**: No human figures visible or 50%+ text.
     - **1 = Solo**: One person is focus.
     - **2 = Small group**: Multiple people all presented as equal.  
     - **3 = Crowd**: No focal person, focal person attempting to appear as the central person in a crowd.
@@ -74,13 +130,16 @@ def main():
     - **Newscast**: Image appears to be from a television news broadcast (not CSPAN)
     - **Congress**: Image appears to be taken in a congressional setting or CSPAN
     *(These are mutually exclusive - select only one if applicable)*
-
+    
     If you're unsure, make a selection, but note the filename and your confusion in a separate document.
     """)
     
-    # Load data
-    metadata_df = load_metadata()
-    if metadata_df is None:
+    # Load data from cloud storage
+    with st.spinner("Loading data from cloud storage..."):
+        metadata_df, images_dict = load_data_from_cloud()
+    
+    if metadata_df is None or images_dict is None:
+        st.error("Failed to load data. Please check your configuration.")
         return
     
     progress_data = load_progress()
@@ -168,15 +227,14 @@ def main():
     if current_idx < total_images:
         row = metadata_df.iloc[current_idx]
         filename = row['filename']
-        image_path = os.path.join(IMAGES_FOLDER, os.path.basename(filename))
         
         st.subheader(f"Image {current_idx + 1} of {total_images}")
         st.write(f"**Filename:** {os.path.basename(filename)}")
         
         # Display image
-        if os.path.exists(image_path):
+        if os.path.basename(filename) in images_dict:
             try:
-                img = Image.open(image_path)
+                img = images_dict[os.path.basename(filename)]
                 
                 # Display image in a reasonable size
                 col1, col2, col3 = st.columns([1, 2, 1])
@@ -280,7 +338,7 @@ def main():
             except Exception as e:
                 st.error(f"Error loading image: {e}")
         else:
-            st.error(f"Image not found: {image_path}")
+            st.error(f"Image not found: {os.path.basename(filename)}")
     
     # Summary and export
     st.markdown("---")
@@ -318,7 +376,7 @@ def main():
     # Export button
     if coded_count == total_images:
         st.success("🎉 All images have been coded!")
-        if st.button("💾 Export Final Results", type="primary"):
+        if st.button("💾 Prepare Final Results for Download", type="primary"):
             # Convert progress data to list format
             final_labels = []
             final_context = []
