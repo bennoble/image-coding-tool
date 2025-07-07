@@ -35,7 +35,7 @@ CONTEXT_CATEGORIES = {
 
 @st.cache_data
 def load_data_from_cloud():
-    """Load CSV and images from cloud storage using secrets"""
+    """Load CSV and download ZIP file info (but not extract all images)"""
     try:
         # Get URLs from Streamlit secrets
         csv_url = st.secrets["data_files"]["csv_url"]
@@ -48,24 +48,34 @@ def load_data_from_cloud():
         # Create DataFrame from downloaded CSV
         metadata_df = pd.read_csv(io.StringIO(csv_response.text))
         
-        # Download and extract images zip
+        # Download ZIP file but don't extract yet - just store the raw data
         zip_response = requests.get(images_zip_url)
         zip_response.raise_for_status()
         
-        # Extract images to memory
-        images_dict = {}
-        with zipfile.ZipFile(io.BytesIO(zip_response.content)) as zip_file:
-            for file_info in zip_file.filelist:
-                if file_info.filename.lower().endswith(('.jpg', '.jpeg', '.png')):
-                    with zip_file.open(file_info) as image_file:
-                        images_dict[os.path.basename(file_info.filename)] = Image.open(io.BytesIO(image_file.read()))
+        # Store ZIP data for on-demand extraction
+        zip_data = zip_response.content
         
-        return metadata_df, images_dict
+        return metadata_df, zip_data
         
     except Exception as e:
         st.error(f"Error loading data from cloud storage: {e}")
         st.info("Make sure your Streamlit secrets are configured correctly.")
         return None, None
+
+@st.cache_data
+def load_single_image(zip_data, filename):
+    """Load a single image from ZIP data on-demand"""
+    try:
+        with zipfile.ZipFile(io.BytesIO(zip_data)) as zip_file:
+            # Find the file in the ZIP
+            for file_info in zip_file.filelist:
+                if os.path.basename(file_info.filename) == filename:
+                    with zip_file.open(file_info) as image_file:
+                        return Image.open(io.BytesIO(image_file.read()))
+        return None
+    except Exception as e:
+        st.error(f"Error loading image {filename}: {e}")
+        return None
 
 def save_to_cloud_csv(metadata_df):
     """Save the updated CSV back to cloud storage"""
@@ -136,9 +146,9 @@ def main():
     
     # Load data from cloud storage
     with st.spinner("Loading data from cloud storage..."):
-        metadata_df, images_dict = load_data_from_cloud()
+        metadata_df, zip_data = load_data_from_cloud()
     
-    if metadata_df is None or images_dict is None:
+    if metadata_df is None or zip_data is None:
         st.error("Failed to load data. Please check your configuration.")
         return
     
@@ -232,10 +242,11 @@ def main():
         st.write(f"**Filename:** {os.path.basename(filename)}")
         
         # Display image
-        if os.path.basename(filename) in images_dict:
+        filename_only = os.path.basename(filename)
+        img = load_single_image(zip_data, filename_only)
+        
+        if img is not None:
             try:
-                img = images_dict[os.path.basename(filename)]
-                
                 # Display image in a reasonable size
                 col1, col2, col3 = st.columns([1, 2, 1])
                 with col2:
@@ -336,9 +347,9 @@ def main():
                         st.rerun()
                 
             except Exception as e:
-                st.error(f"Error loading image: {e}")
+                st.error(f"Error displaying image: {e}")
         else:
-            st.error(f"Image not found: {os.path.basename(filename)}")
+            st.error(f"Image not found: {filename_only}")
     
     # Summary and export
     st.markdown("---")
