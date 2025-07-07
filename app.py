@@ -272,12 +272,15 @@ def main():
                             }
                             save_progress(progress_data)
                             
-                            # Don't auto-advance - let user select context if needed
+                            # Use st.rerun() instead of st.experimental_rerun()
                             st.rerun()
                 
                 # Show current selection
                 if current_label is not None:
                     st.success(f"✅ Current selection: {current_label} - {CATEGORIES[current_label]}")
+                    
+                    # Show a quick visual confirmation without rerunning
+                    st.markdown("*Selection saved automatically*")
                 else:
                     st.info("⏳ No category selected yet")
                 
@@ -296,13 +299,14 @@ def main():
                         else:
                             st.session_state.context_labels[current_idx] = 1
                         
-                        # Save progress
+                        # Save progress immediately
                         progress_data[str(current_idx)] = {
                             'group_label': st.session_state.coded_labels[current_idx],
                             'context': st.session_state.context_labels[current_idx]
                         }
                         save_progress(progress_data)
-                        st.rerun()
+                        # Don't rerun immediately - let user see the change
+                        st.success("Context updated!")
                 
                 with context_cols[1]:
                     congress_active = current_context == 2
@@ -312,13 +316,14 @@ def main():
                         else:
                             st.session_state.context_labels[current_idx] = 2
                         
-                        # Save progress
+                        # Save progress immediately
                         progress_data[str(current_idx)] = {
                             'group_label': st.session_state.coded_labels[current_idx],
                             'context': st.session_state.context_labels[current_idx]
                         }
                         save_progress(progress_data)
-                        st.rerun()
+                        # Don't rerun immediately - let user see the change
+                        st.success("Context updated!")
                 
                 with context_cols[2]:
                     if current_context is not None:
@@ -334,6 +339,8 @@ def main():
                         if st.button("➡️ Next Image", key="advance_btn", type="primary"):
                             if current_idx < total_images - 1:
                                 st.session_state.current_index = current_idx + 1
+                                # Clear the image cache for the next image to avoid lag
+                                st.cache_data.clear()
                             st.rerun()
                 
                 # Clear selection button
